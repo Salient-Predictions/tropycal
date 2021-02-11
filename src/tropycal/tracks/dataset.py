@@ -7,7 +7,7 @@ import re
 import scipy.interpolate as interp
 import urllib
 import warnings
-from datetime import datetime as dt,timedelta
+from datetime import datetime as dt,timedelta,date
 from scipy.ndimage import gaussian_filter as gfilt
 #Import other tropycal objects
 from ..plot import Plot
@@ -203,7 +203,8 @@ class TrackDataset:
         #Time duration to read in HURDAT
         start_time = dt.now()
         print("--> Starting to read in HURDAT2 data")
-        
+        print("----  MODIFIED VERSIONS --- ")        
+
         #Quick error check
         atl_online = True
         pac_online = True
@@ -2497,6 +2498,546 @@ class TrackDataset:
             return [g[0] for g in p.groupby("stormid")]
         else:
             return p
+
+
+    def filter_storms_simple(self,date_range=None,thresh={},domain=None,doInterp=False,return_keys=True):
+        
+        r"""
+        Filters all storms by various thresholds.
+        
+        Parameters
+        ----------
+        year_range : list or tuple
+            List or tuple representing the start and end years (e.g., (1950,2018)). Default is start and end years of dataset.
+        date_range : list or tuple
+            List or tuple representing the start and end dates as a string in 'month/day' format (e.g., ('6/1','8/15')). Default is ('1/1','12/31') or full year.
+        thresh : dict
+            Keywords include:
+                
+            * **sample_min** - minimum number of storms in a grid box for the cmd_request to be applied. For the functions 'percentile' and 'average', 'sample_min' defaults to 5 and will override any value less than 5.
+            * **v_min** - minimum wind for a given point to be included in the cmd_request.
+            * **p_max** - maximum pressure for a given point to be included in the cmd_request.
+            * **dv_min** - minimum change in wind over dt_window for a given point to be included in the cmd_request.
+            * **dp_max** - maximum change in pressure over dt_window for a given point to be included in the cmd_request.
+            * **dt_window** - time window over which change variables are calculated (hours). Default is 24.
+            * **dt_align** - alignment of dt_window for change variables -- 'start','middle','end' -- e.g. 'end' for dt_window=24 associates a TC point with change over the past 24 hours. Default is middle.
+            
+            Units of all wind variables = kt, and pressure variables = hPa. These are added to the subtitle.
+        domain : str
+            String or tuple representing a bounded region, 'latW/latE/latS/latN'.
+        doInterp : bool
+            Whether to interpolate track data to hourly. Default is False.
+        return_keys : bool
+            If True, returns a list of storm IDs that match the specified criteria. Otherwise returns a pandas.DataFrame object with all matching data points. Default is True.
+        
+        Returns
+        -------
+        list or pandas.DataFrame
+            Check return_keys for more information.
+        """
+        
+        #Update thresh based on input
+        default_thresh={'sample_min':1,'p_max':9999,'v_min':0,'v_max':9999,'dv_min':-9999,'dp_max':9999,'dv_max':9999,'dp_min':-9999,
+                        'dt_window':24,'dt_align':'middle'}
+        for key in thresh:
+            default_thresh[key] = thresh[key]
+        thresh = default_thresh
+
+        #Determine domain over which to filter data
+        
+        if domain is None:
+            domain = (0,360,-90,90)
+        else:
+            domain = (domain['w'],domain['e'],domain['s'],domain['n'])
+        lon_min,lon_max,lat_min,lat_max = domain
+        
+        #if isinstance(domain,str):
+        #    lon_min,lon_max,lat_min,lat_max = [float(i) for i in domain.split("/")]
+        #else:
+        #    lon_min,lon_max,lat_min,lat_max = domain
+        
+        #Determine year and date range
+        # year_min,year_max = year_range
+        print(date_range)
+        date_min = dt.combine(date_range[0], dt.min.time())
+        date_max = dt.combine(date_range[1], dt.min.time())
+        # date_min, date_max = [dt for i in date_range]
+        print(type(date_min),type(date_max))
+        date_max += timedelta(days=1,seconds=-1)
+        
+        #Determine if a date falls within the date range
+        def date_range_test(t,t_min,t_max):
+            test1 = (t>=t_min)
+            test2 = (t<=t_max)
+            return test1 & test2
+
+        # def date_range_test(t,t_min,t_max):
+        #     if date_min<date_max:
+        #         test1 = (t>=t_min.replace(year=t.year))
+        #         test2 = (t<=t_max.replace(year=t.year))
+        #         return test1 & test2
+        #     else:
+        #         test1 = (t_min.replace(year=t.year)<=t<dt(t.year+1,1,1))
+        #         test2 = (dt(t.year,1,1)<=t<=t_max.replace(year=t.year))
+        #         return test1 | test2
+        
+        #Create empty dictionary to store output in
+        points = {}
+        for name in ['vmax','mslp','type','lat','lon','date','season','stormid','ace']+ \
+                    ['dmslp_dt','dvmax_dt','dx_dt','dy_dt','speed']*int(doInterp):
+            points[name] = []
+        
+        #Iterate over every storm in TrackDataset
+        for key in self.keys:
+            
+            #Retrieve storm dict
+            istorm = self.data[key].copy()
+            
+            #Interpolate temporally if requested
+            if doInterp:
+                istorm = interp_storm(istorm,timeres=1,dt_window=thresh['dt_window'],dt_align=thresh['dt_align'])
+                timeres = 1
+            else:
+                timeres = 6
+            #Iterate over every timestep of the storm
+            for i in range(len(istorm['date'])):
+                
+                #Filter to only tropical cyclones, and filter by dates & coordiates
+                # and year_min<=istorm['date'][i].year<=year_max \
+                if istorm['type'][i] in ['TD','SD','TS','SS','HU','TY'] \
+                and lat_min<=istorm['lat'][i]<=lat_max and lon_min<=istorm['lon'][i]%360<=lon_max \
+                and date_range_test(istorm['date'][i],date_min,date_max):
+                    
+                    #Append data points
+                    points['vmax'].append(istorm['vmax'][i])
+                    points['mslp'].append(istorm['mslp'][i])
+                    points['type'].append(istorm['type'][i])
+                    points['lat'].append(istorm['lat'][i])
+                    points['lon'].append(istorm['lon'][i])
+                    points['date'].append(istorm['date'][i])
+                    points['season'].append(istorm['season'])
+                    points['stormid'].append(key)
+                    if istorm['vmax'][i]>34:
+                        points['ace'].append(istorm['vmax'][i]**2*1e-4*timeres/6)
+                    else:
+                        points['ace'].append(0)                        
+                        
+                    #Append separately for interpolated data
+                    if doInterp:
+                        points['dvmax_dt'].append(istorm['dvmax_dt'][i])
+                        points['dmslp_dt'].append(istorm['dmslp_dt'][i])
+                        points['dx_dt'].append(istorm['dx_dt'][i])
+                        points['dy_dt'].append(istorm['dy_dt'][i])
+                        points['speed'].append(istorm['speed'][i])
+        
+        #Create a DataFrame from the dictionary
+        p = pd.DataFrame.from_dict(points)
+        
+        #Filter by thresholds
+        if thresh['v_min']>0:
+            p = p.loc[(p['vmax']>=thresh['v_min'])]
+        if thresh['v_max']<9999:
+            p = p.loc[(p['vmax']<=thresh['v_max'])]
+        if thresh['p_max']<9999:
+            p = p.loc[(p['mslp']<=thresh['p_max'])]
+        if doInterp:
+            if thresh['dv_min']>-9999:
+                p = p.loc[(p['dvmax_dt']>=thresh['dv_min'])]
+            if thresh['dp_max']<9999:
+                p = p.loc[(p['dmslp_dt']<=thresh['dp_max'])]
+            if thresh['dv_max']<9999:
+                p = p.loc[(p['dvmax_dt']<=thresh['dv_max'])]
+            if thresh['dp_min']>-9999:
+                p = p.loc[(p['dmslp_dt']>=thresh['dp_min'])]
+        
+        #Determine how to return data
+        if return_keys:
+            return [g[0] for g in p.groupby("stormid")]
+        else:
+            return p
+
+
+    def gridded_stats_simple(self,request,thresh={},year_range=None,year_range_subtract=None,year_average=False,
+                      date_range=None,binsize=1,domain=None,ax=None,return_ax=False,\
+                      return_array=False,cartopy_proj=None,prop={},map_prop={},full_latlon=False, if_plot=False):
+        
+        r"""
+        Creates a plot of gridded statistics.
+        
+        Parameters
+        ----------
+        request : str
+            This string is a descriptor for what you want to plot.
+            It will be used to define the variable (e.g. 'wind' --> 'vmax') and the function (e.g. 'maximum' --> np.max()).
+            This string is also used as the plot title.
+            
+            Variable words to use in request:
+                
+            * **wind** - (kt). Sustained wind.
+            * **pressure** - (hPa). Minimum pressure.
+            * **wind change** - (kt/time). Must be followed by an integer value denoting the length of the time window '__ hours' (e.g., "wind change in 24 hours").
+            * **pressure change** - (hPa/time). Must be followed by an integer value denoting the length of the time window '__ hours' (e.g., "pressure change in 24 hours").
+            * **storm motion** - (km/hour). Can be followed a length of time window. Otherwise defaults to 24 hours.
+            
+            Units of all wind variables are knots and pressure variables are hPa. These are added into the title.
+            
+            Function words to use in request:
+                
+            * **maximum**
+            * **minimum**
+            * **average** 
+            * **percentile** - Percentile must be preceded by an integer [0,100].
+            * **number** - Number of storms in grid box satisfying filter thresholds.
+            
+            Example usage: "maximum wind change in 24 hours", "50th percentile wind", "number of storms"
+            
+        thresh : dict, optional
+            Keywords include:
+                
+            * **sample_min** - minimum number of storms in a grid box for the request to be applied. For the functions 'percentile' and 'average', 'sample_min' defaults to 5 and will override any value less than 5.
+            * **v_min** - minimum wind for a given point to be included in the request.
+            * **p_max** - maximum pressure for a given point to be included in the request.
+            * **dv_min** - minimum change in wind over dt_window for a given point to be included in the request.
+            * **dp_max** - maximum change in pressure over dt_window for a given point to be included in the request.
+            * **dt_window** - time window over which change variables are calculated (hours). Default is 24.
+            * **dt_align** - alignment of dt_window for change variables -- 'start','middle','end' -- e.g. 'end' for dt_window=24 associates a TC point with change over the past 24 hours. Default is middle.
+            
+            Units of all wind variables = kt, and pressure variables = hPa. These are added to the subtitle.
+
+        year_range : list or tuple, optional
+            List or tuple representing the start and end years (e.g., (1950,2018)). Default is start and end years of dataset.
+        year_range_subtract : list or tuple, optional
+            A year range to subtract from the previously specified "year_range". If specified, will create a difference plot.
+        year_average : bool, optional
+            If True, both year ranges will be computed and plotted as an annual average.
+        date_range : list or tuple, optional
+            List or tuple representing the start and end dates as a string in 'month/day' format (e.g., ('6/1','8/15')). Default is ('1/1','12/31') or full year.
+        binsize : float, optional
+            Grid resolution in degrees. Default is 1 degree.
+        domain : str, optional
+            Domain for the plot. Default is "dynamic". Please refer to :ref:`options-domain` for available domain options.
+        ax : axes, optional
+            Instance of axes to plot on. If none, one will be generated. Default is none.
+        return_ax : bool, optional
+            If True, returns the axes instance on which the plot was generated for the user to further modify. Default is False.
+        return_array : bool, optional
+            If True, returns the gridded 2D array used to generate the plot. Default is False.
+        cartopy_proj : ccrs, optional
+            Instance of a cartopy projection to use. If none, one will be generated. Default is none.
+        
+        Other Parameters
+        ----------------
+        prop : dict, optional
+            Customization properties of plot. Please refer to :ref:`options-prop-gridded` for available options.
+        map_prop : dict, optional
+            Customization properties of Cartopy map. Please refer to :ref:`options-map-prop` for available options.
+        """
+
+        default_prop = {'smooth':None}
+        for key in prop.keys():
+            default_prop[key] = prop[key]
+        prop = default_prop
+        
+        #Update thresh based on input
+        default_thresh={'sample_min':np.nan,'p_max':np.nan,'v_min':np.nan,'dv_min':np.nan,'dp_max':np.nan,'dv_max':np.nan,'dp_min':np.nan,'dt_window':24,'dt_align':'middle'}
+        for key in thresh:
+            default_thresh[key] = thresh[key]
+        thresh = default_thresh
+        
+        #Retrieve the requested function, variable for computing stats, and plot title. These modify thresh if necessary.
+        thresh,func = find_func(request,thresh)
+        thresh,varname = find_var(request,thresh)
+        thresh,plot_subtitle = construct_title(thresh)
+        
+        #Determine whether request includes a vector (i.e., TC motion vector)
+        VEC_FLAG = isinstance(varname,tuple)
+        
+        #Determine year range of plot
+        if year_range == None:
+            start_year = self.data[self.keys[0]]['year']
+            end_year = self.data[self.keys[-1]]['year']
+            year_range = (start_year,end_year)
+        
+        #Determine year range to subtract, if making a difference plot
+        if year_range_subtract != None:
+            if isinstance(year_range_subtract,(list,tuple)) == False:
+                msg = "\"year_range_subtract\" must be of type list or tuple."
+                raise TypeError(msg)
+            if len(year_range_subtract) != 2:
+                msg = "\"year_range_subtract\" must contain 2 elements."
+                raise ValueError(msg)
+            year_range_subtract = tuple(year_range_subtract)
+        
+        #---------------------------------------------------------------------------------------------------
+        
+        #Perform analysis either once or twice depending on year_range_subtract
+        if year_range_subtract == None:
+            years_analysis = [year_range]
+        else:
+            years_analysis = [year_range,year_range_subtract]
+        grid_x_years = []
+        grid_y_years = []
+        grid_z_years = []
+        
+
+        shift_s = None
+        shift_w = None
+        if full_latlon:
+            shift_s = domain['s'] % binsize
+            shift_w = domain['w'] % binsize
+            print("Shift S: ", shift_s)
+            print("Shift W: ", shift_w)
+
+        for year_range_temp in years_analysis:
+
+            #Obtain all data points for the requested threshold and year/date ranges. Interpolate data to hourly.
+            print("--> Getting filtered storm tracks")
+            points = self.filter_storms_simple(date_range,thresh=thresh,doInterp=True,return_keys=False)
+
+            #Round lat/lon points down to nearest bin
+            if shift_s is not None:
+                to_bin_lat = lambda x: np.around((x + shift_s) / binsize) * binsize - shift_s
+                to_bin_lon = lambda x: np.around((x + shift_w) / binsize) * binsize - shift_w
+            else:
+                to_bin_lat = lambda x: np.around(x / binsize) * binsize
+                to_bin_lon = to_bin_lat
+            points["latbin"] = points.lat.map(to_bin_lat)
+            points["lonbin"] = points.lon.map(to_bin_lon)
+
+
+            print("points", type(points), points)
+
+            #---------------------------------------------------------------------------------------------------
+
+            #Group by latbin,lonbin,stormid
+            print("--> Grouping by lat/lon/storm")
+            groups = points.groupby(["latbin","lonbin","stormid","season"])
+
+            #Loops through groups, and apply stat func to storms
+            #Constructs a new dataframe containing the lat/lon bins, storm ID and the plotting variable
+            new_df = {'latbin':[],'lonbin':[],'stormid':[],'season':[],varname:[]}
+            for g in groups:
+                # print('g', g, g[0][0], g[0][1], g[1])
+
+                #Apply function to all time steps in which a storm tracks within a gridpoint
+                if VEC_FLAG:
+                    new_df[varname].append([func(g[1][v].values) for v in varname])
+                else:
+                    new_df[varname].append(func(g[1][varname].values))
+                new_df['latbin'].append(g[0][0])
+                new_df['lonbin'].append(g[0][1])
+                new_df['stormid'].append(g[0][2])
+                new_df['season'].append(g[0][3])
+            new_df = pd.DataFrame.from_dict(new_df)
+
+            #---------------------------------------------------------------------------------------------------
+
+            #Group again by latbin,lonbin
+            #Construct two 1D lists: zi (grid values) and coords, that correspond to the 2D grid
+            groups = new_df.groupby(["latbin", "lonbin"])
+
+            # print('groups', groups.groups.keys())
+
+            #Apply the function to all storms that pass through a gridpoint
+            if VEC_FLAG:
+                zi = [[func(v) for v in zip(*g[1][varname])] if len(g[1]) >= thresh['sample_min'] else [np.nan]*2 for g in groups]
+            else:
+                zi = [func(g[1][varname]) if len(g[1]) >= thresh['sample_min'] else np.nan for g in groups]
+
+            #Construct a 1D array of coordinates
+            coords = [g[0] for g in groups]
+
+            # print('coords',coords)
+
+            #Construct a 2D longitude and latitude grid, using the specified binsize resolution
+
+            if full_latlon:
+                xi = np.arange(domain['e'],domain['w']+binsize,binsize)
+                yi = np.arange(domain['s'],domain['n']+binsize,binsize)
+            else:                
+                if prop['smooth'] is not None:
+                    all_lats = [(round(l/binsize)*binsize) for key in self.data.keys() for l in self.data[key]['lat']]
+                    all_lons = [(round(l/binsize)*binsize)%360 for key in self.data.keys() for l in self.data[key]['lon']]
+                    xi = np.arange(min(all_lons)-binsize,max(all_lons)+2*binsize,binsize)
+                    yi = np.arange(min(all_lats)-binsize,max(all_lats)+2*binsize,binsize)
+                    if self.basin == 'all':
+                        xi = np.arange(0,360+binsize,binsize)
+                        yi = np.arange(-90,90+binsize,binsize)
+                else:
+                    xi = np.arange(np.nanmin(points["lonbin"])-binsize,np.nanmax(points["lonbin"])+2*binsize,binsize)
+                    yi = np.arange(np.nanmin(points["latbin"])-binsize,np.nanmax(points["latbin"])+2*binsize,binsize)
+            grid_x, grid_y = np.meshgrid(xi,yi)
+            grid_x_years.append(grid_x)
+            grid_y_years.append(grid_y)
+
+            #Construct a 2D grid for the z value, depending on whether vector or scalar quantity
+            if VEC_FLAG:
+                grid_z_u = np.ones(grid_x.shape) * np.nan
+                grid_z_v = np.ones(grid_x.shape) * np.nan
+                for c,z in zip(coords,zi):
+                    grid_z_u[np.where((grid_y==c[0]) & (grid_x==c[1]))] = z[0]
+                    grid_z_v[np.where((grid_y==c[0]) & (grid_x==c[1]))] = z[1]
+                grid_z = [grid_z_u,grid_z_v]
+            else:
+                grid_z = np.ones(grid_x.shape)*np.nan
+                for c,z in zip(coords,zi):
+                    grid_z[np.where((grid_y==c[0]) & (grid_x==c[1]))] = z
+
+            #Set zero values to nan's if necessary
+            if varname == 'date':
+                grid_z[np.where(grid_z==0)] = np.nan
+            
+            #Add to list of grid_z's
+            grid_z_years.append(grid_z)
+        
+        #---------------------------------------------------------------------------------------------------
+        
+        #Calculate difference between plots, if specified
+        if len(grid_z_years) == 2:
+            try:
+                #Import xarray and construct DataArray
+                import xarray as xr
+                
+                #Determine whether to use averages
+                if year_average == True:
+                    years_listed = len(range(year_range[0],year_range[1]+1))
+                    grid_z_years[0] = grid_z_years[0] / years_listed
+                    years_listed = len(range(year_range_subtract[0],year_range_subtract[1]+1))
+                    grid_z_years[1] = grid_z_years[1] / years_listed
+                   
+                #Construct DataArrays
+                grid_z_1 = xr.DataArray(np.nan_to_num(grid_z_years[0]),coords=[grid_y_years[0].T[0],grid_x_years[0][0]],dims=['lat','lon'])
+                grid_z_2 = xr.DataArray(np.nan_to_num(grid_z_years[1]),coords=[grid_y_years[1].T[0],grid_x_years[1][0]],dims=['lat','lon'])
+                
+                #Compute difference grid
+                grid_z = grid_z_1 - grid_z_2
+                
+                #Reconstruct lat & lon grids
+                xi = grid_z.lon.values
+                yi = grid_z.lat.values
+                grid_z = grid_z.values
+                grid_x, grid_y = np.meshgrid(xi,yi)
+                
+                #Determine NaNs
+                grid_z_years[0][np.isnan(grid_z_years[0])] = -9999
+                grid_z_years[1][np.isnan(grid_z_years[1])] = -8999
+                grid_z_years[0][grid_z_years[0]!=-9999] = 0
+                grid_z_years[1][grid_z_years[1]!=-8999] = 0
+                grid_z_1 = xr.DataArray(np.nan_to_num(grid_z_years[0]),coords=[grid_y_years[0].T[0],grid_x_years[0][0]],dims=['lat','lon'])
+                grid_z_2 = xr.DataArray(np.nan_to_num(grid_z_years[1]),coords=[grid_y_years[1].T[0],grid_x_years[1][0]],dims=['lat','lon'])
+                grid_z_check = (grid_z_1 - grid_z_2).values
+                grid_z[grid_z_check==-1000] = np.nan
+                
+            except ImportError as e:
+                raise RuntimeError("Error: xarray is not available. Install xarray in order to use the subtract year functionality.") from e
+        else:
+            #Determine whether to use averages
+            if year_average == True:
+                years_listed = len(range(year_range[0],year_range[1]+1))
+                grid_z = grid_z / years_listed
+        
+        #Create instance of plot object
+        try:
+            self.plot_obj
+        except:
+            self.plot_obj = TrackPlot()
+        
+        #Create cartopy projection using basin
+        if domain == None:
+            domain = self.basin
+        if points.empty:
+            print('No points to plot')
+        else:
+            if if_plot:
+                if cartopy_proj == None:
+                    if max(points['lon']) > 150 or min(points['lon']) < -150:
+                        self.plot_obj.create_cartopy(proj='PlateCarree',central_longitude=180.0)
+                    else:
+                        self.plot_obj.create_cartopy(proj='PlateCarree',central_longitude=0.0)
+            
+                #Format left title for plot
+                endash = u"\u2013"
+                dot = u"\u2022"
+                title_L = request.lower()
+                for name in ['wind','vmax']:
+                    title_L = title_L.replace(name,'wind (kt)')
+                for name in ['pressure','mslp']:
+                    title_L = title_L.replace(name,'pressure (hPa)')
+                for name in ['heading','motion']:
+                    title_L = title_L.replace(name,f'heading (kt) over {thresh["dt_window"]} hours')
+                for name in ['speed','movement']:
+                    title_L = title_L.replace(name,f'forward speed (kt) over {thresh["dt_window"]} hours')
+                if request.find('change') >= 0:
+                    title_L = title_L+f", {thresh['dt_align']}"
+                title_L = title_L[0].upper() + title_L[1:] + plot_subtitle
+            
+                #Format right title for plot
+                date_range = [d.strftime('%b/%d') for d in date_range]
+                add_avg = ' year-avg' if year_average == True else ''
+                # if year_range_subtract == None:
+                #     title_R = f'{date_range[0].replace("/"," ")} {endash} {date_range[1].replace("/"," ")} {dot} {year_range[0]} {endash} {year_range[1]}{add_avg}'
+                # else:
+                #     title_R = f'{date_range[0].replace("/"," ")} {endash} {date_range[1].replace("/"," ")}\n{year_range[0]}{endash}{year_range[1]}{add_avg} minus {year_range_subtract[0]}{endash}{year_range_subtract[1]}{add_avg}'
+                prop['title_L'],prop['title_R'] = title_L," "
+        
+        #Change the masking for variables that go out to zero near the edge of the data
+        if prop['smooth'] is not None:
+            
+            #Replace NaNs with zeros to apply Gaussian filter
+            grid_z_zeros = grid_z.copy()
+            grid_z_zeros[np.isnan(grid_z)] = 0
+            initial_mask = grid_z.copy() #Save initial mask
+            initial_mask[np.isnan(grid_z)] = -9999
+            grid_z_zeros = gfilt(grid_z_zeros,sigma=prop['smooth'])
+            
+            
+            if len(grid_z_years) == 2:
+                #grid_z_1_zeros = np.asarray(grid_z_1)
+                #grid_z_1_zeros[grid_z_1==-9999]=0
+                #grid_z_1_zeros = gfilt(grid_z_1_zeros,sigma=prop['smooth'])
+                
+                #grid_z_2_zeros = np.asarray(grid_z_2)
+                #grid_z_2_zeros[grid_z_2==-8999]=0
+                #grid_z_2_zeros = gfilt(grid_z_2_zeros,sigma=prop['smooth'])
+                #grid_z_zeros = grid_z_1_zeros - grid_z_2_zeros
+                #test_zeros = (grid_z_1_zeros<.02*np.nanmax(grid_z_1_zeros)) & (grid_z_2_zeros<.02*np.nanmax(grid_z_2_zeros))
+                pass
+            
+            elif varname not in [('dx_dt','dy_dt'),'speed','mslp']:
+                
+                #Apply cutoff at 2% of maximum
+                test_zeros = (grid_z_zeros<.02*np.amax(grid_z_zeros))
+                grid_z_zeros[test_zeros] = -9999
+                initial_mask = grid_z_zeros.copy()
+                
+            grid_z_zeros[initial_mask==-9999] = np.nan
+            grid_z = grid_z_zeros.copy()
+        
+        if points.empty:
+            print('No points to plot, plot gridded')
+        else:
+            #Plot gridded field
+            if if_plot:
+                plot_ax = self.plot_obj.plot_gridded(grid_x,grid_y,grid_z,VEC_FLAG,domain,ax=ax,return_ax=True,prop=prop,map_prop=map_prop)
+        
+        #Format grid into xarray if specified
+        if return_array == True:
+            try:
+                #Import xarray and construct DataArray, replacing NaNs with zeros
+                import xarray as xr
+                arr = xr.DataArray(np.nan_to_num(grid_z),coords=[grid_y.T[0],grid_x[0]],dims=['lat','lon'])
+                return arr
+            except ImportError as e:
+                raise RuntimeError("Error: xarray is not available. Install xarray in order to use the 'return_array' flag.") from e
+
+        #Return axis
+        if return_ax == True and return_array == True:
+            return {'ax':plot_ax,'array':arr}
+        if return_ax == False and return_array == True:
+            return arr
+        if ax != None or return_ax == True: return plot_ax
+
+
 
     def gridded_stats(self,request,thresh={},year_range=None,year_range_subtract=None,year_average=False,
                       date_range=('1/1','12/31'),binsize=1,domain=None,ax=None,return_ax=False,\
