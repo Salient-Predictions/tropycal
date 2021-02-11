@@ -275,15 +275,19 @@ class TrackDataset:
                 current_id = line[0]
                 
                 #add empty lists
-                for val in ['date','extra_obs','special','type','lat','lon','vmax','mslp','wmo_basin']:
+                for val in ['date','extra_obs','special','type','lat','lon','vmax','mslp','wmo_basin',
+                            'ne34kt','se34kt','sw34kt','nw34kt','ne50kt','se50kt','sw50kt','nw50kt','ne64kt','se64kt','sw64kt','nw64kt']:
                     self.data[line[0]][val] = []
                 self.data[line[0]]['ace'] = 0.0
                 
+
+
             #if not a header, enter storm info into its dict entry
             else:
                 
                 #Retrieve important info about storm
                 yyyymmdd,hhmm,special,storm_type,lat,lon,vmax,mslp = line[0:8]
+                ne34kt,se34kt,sw34kt,nw34kt,ne50kt,se50kt,sw50kt,nw50kt,ne64kt,se64kt,sw64kt,nw64kt = line[9:21]
                 
                 #Parse into format to be entered into dict
                 date = dt.strptime(yyyymmdd+hhmm,'%Y%m%d%H%M')
@@ -320,6 +324,19 @@ class TrackDataset:
                 self.data[current_id]['lon'].append(lon)
                 self.data[current_id]['vmax'].append(vmax)
                 self.data[current_id]['mslp'].append(mslp)
+
+                self.data[current_id]['ne34kt'].append(ne34kt)
+                self.data[current_id]['se34kt'].append(se34kt)
+                self.data[current_id]['sw34kt'].append(sw34kt)
+                self.data[current_id]['nw34kt'].append(nw34kt)
+                self.data[current_id]['ne50kt'].append(ne50kt)
+                self.data[current_id]['se50kt'].append(se50kt)
+                self.data[current_id]['sw50kt'].append(sw50kt)
+                self.data[current_id]['nw50kt'].append(nw50kt)
+                self.data[current_id]['ne64kt'].append(ne64kt)
+                self.data[current_id]['se64kt'].append(se64kt)
+                self.data[current_id]['sw64kt'].append(sw64kt)
+                self.data[current_id]['nw64kt'].append(nw64kt)
                 
                 #Add basin
                 if add_basin == 'north_atlantic':
