@@ -2884,6 +2884,9 @@ class TrackDataset:
                     xi = np.arange(np.nanmin(points["lonbin"])-binsize,np.nanmax(points["lonbin"])+2*binsize,binsize)
                     yi = np.arange(np.nanmin(points["latbin"])-binsize,np.nanmax(points["latbin"])+2*binsize,binsize)
             grid_x, grid_y = np.meshgrid(xi,yi)
+            print(xi, yi)
+            print('---')
+            print(grid_x, grid_y)
             grid_x_years.append(grid_x)
             grid_y_years.append(grid_y)
 
